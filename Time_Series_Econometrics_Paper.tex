@@ -6,7 +6,7 @@
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{float}
-\usepackage{caption}
+\usepackage[labelfont=bf]{caption} % Automatically bolds "Figure X:"
 \usepackage{subcaption}
 \usepackage{setspace}
 \usepackage{microtype}
@@ -50,6 +50,7 @@ mean with widening prediction intervals, in sharp contrast to the flat extrapola
 produced by Holt--Winters.
 \end{abstract}
 
+\newpage
 \tableofcontents
 \newpage
 
@@ -206,7 +207,7 @@ The forecast degenerates to a near-flat line, capturing none of the cycle.}
 \label{sec:regression}
 % =====================================================================
 
-\subsection{OLS trend regression}
+\subsection{OLS Trend Regression: No Linear Drift}
 \label{sec:ols}
 
 I fit the linear trend model
@@ -272,7 +273,7 @@ preserved in the residuals, confirming that OLS standard errors are invalid.}
 \label{fig:trend_resid}
 \end{figure}
 
-\subsection{GLS with AR(1) errors}
+\subsection{GLS Correction: Adjusting for Autocorrelated Errors}
 \label{sec:gls}
 
 When the errors of a regression model follow an autoregressive process, OLS is
@@ -392,7 +393,7 @@ PACF retains significant spikes at lags 1--2.}
 \label{sec:arma}
 % =====================================================================
 
-\subsection{Candidate models}
+\subsection{Candidate Models: Evaluating AR, MA, and ARMA}
 \label{sec:candidates}
 
 Six candidate ARMA($p,q$) models are fitted to $\Delta\log(\text{lynx})$
@@ -421,7 +422,7 @@ ARMA(1,1) & 3 & 232.047 & \\
 model (AR(2)). In practice, an AIC gap exceeding 10 points is considered decisive
 \citep{burnham2004multimodel}.
 
-\subsection{Preferred model: ARMA(2,1)}
+\subsection{Preferred Model: ARMA(2,1) Dynamics}
 \label{sec:arma21}
 
 Table~\ref{tab:arma21} lists the estimated coefficients.
@@ -439,8 +440,8 @@ $\phi_2$ (ar2) & $-0.7367$           & 0.0614 & reversal / oscillation \\
 $\theta_1$ (ma1) & $-1.0000$         & 0.0265 & near boundary \\
 Intercept      & $\phantom{-}0.0028$ & 0.0042 & long-run mean $\approx 0$ \\
 \midrule
-$\hat{\sigma}^2$ & \multicolumn{2}{l}{0.2721} & \\
-AIC              & \multicolumn{2}{l}{188.857} & \\
+$\hat{\sigma}^2$ & 0.2721 & & \\
+AIC              & 188.857 & & \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -460,7 +461,7 @@ in excellent agreement with the empirically observed $\sim$10-year hare--lynx cy
 The MA coefficient $\hat{\theta}_1 \approx -1.0$ is at the boundary of invertibility.
 This is a flag worth noting and is addressed directly in Section~\ref{sec:robust}.
 
-\subsection{Residual diagnostics}
+\subsection{Residual Diagnostics: White Noise Validation}
 
 Figure~\ref{fig:arma21_resid} shows the residual ACF and PACF. No spike exceeds the
 95\% confidence band at lag~1 or beyond for the ACF; the PACF is similarly clean.
@@ -489,7 +490,7 @@ No systematic structure is visible, consistent with white-noise residuals.}
 \label{fig:arma21_resid}
 \end{figure}
 
-\subsection{Robustness check: ARIMA(2,1,0) vs.\ ARIMA(2,1,1)}
+\subsection{Robustness Check: ARIMA(2,1,0) vs.\ ARIMA(2,1,1)}
 \label{sec:robust}
 
 The near-boundary MA coefficient ($\hat{\theta}_1 \approx -1$) warrants a robustness
@@ -643,6 +644,7 @@ process. A GARCH extension might also be considered to model the conditional
 heteroskedasticity visible in the raw series, though the log-differencing
 transformation already reduces this substantially.
 
+\newpage
 % =====================================================================
 % References
 % =====================================================================
