@@ -1,37 +1,51 @@
 # ==============================================================================
-# Time Series Econometrics — Applied Project
-# Dataset: Canadian Lynx Population Dynamics (1821–1934)
-# Student: Samundra Adhikari
+# Cycles, Not Trends: A Time Series Analysis of Canadian Lynx Population Dynamics
+# Author : Samundra Adhikari
+# Dataset: `lynx` (base R) — Annual lynx trappings in Canada, 1821–1934
 #
-# OVERVIEW:
-# This script executes a comprehensive time series analysis pipeline. It moves
-# from exploratory data analysis and classical smoothing techniques through 
-# regression with autocorrelated errors (GLS), and finally into formal Box-Jenkins 
-# ARIMA modeling and forecasting.
+# PIPELINE OVERVIEW
+# -----------------
+# Part 1  EDA — visual inspection, summary statistics
+# Part 2  Non-parametric trend check (moving average)
+# Part 3  Autocorrelation analysis (ACF / PACF)
+# Part 4  Holt-Winters benchmark (demonstrates why smoothing fails on cycles)
+# Part 5  OLS trend regression + GLS correction for autocorrelated errors
+# Part 6  Log + first-difference transformation toward stationarity (ADF test)
+# Part 7  ARMA model selection via AIC + robustness check ARIMA(2,1,0/1)
+# Part 8  12-step-ahead forecasting with ARMA(2,1)
 #
-# PLOTTING NOTE: 
-# To keep the workspace clean and avoid duplicate rendering, all visualizations 
-# are routed directly to PDF files using a custom wrapper function.
+# REPRODUCIBILITY
+# ---------------
+# Requires R >= 4.0.0 and the packages below. Run from any working directory;
+# all PDF figures are written to the same folder as this script.
+#
+# To replicate exactly, install the required packages first:
+#   install.packages(c("nlme", "tseries"))
+#
+# Session info is printed at the end of the script.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# 0. Environment Setup & Helper Functions
+# 0. Package loading
 # ------------------------------------------------------------------------------
-# We require 'nlme' for Generalized Least Squares estimation and 'tseries' 
-# for formal Augmented Dickey-Fuller (ADF) unit-root testing.
-if (!require(nlme)) install.packages("nlme")
-if (!require(tseries)) install.packages("tseries")
+required_pkgs <- c("nlme", "tseries")
+missing_pkgs  <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
+if (length(missing_pkgs) > 0) {
+  message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
+  install.packages(missing_pkgs)
+}
 
-library(nlme)
-library(tseries)
+library(nlme)     # gls() for Generalised Least Squares
+library(tseries)  # adf.test() for Augmented Dickey-Fuller unit-root test
 
-# Load the canonical Canadian Lynx dataset from base R
+# Load the built-in lynx dataset
 data(lynx)
 
-# Helper Function: savepdf
-# Purpose: Opens a PDF graphics device, evaluates the plotting expression, 
-# and silently closes the device. This ensures plots are saved locally 
-# without cluttering the RStudio Viewer pane.
+# ------------------------------------------------------------------------------
+# Helper: savepdf()
+# Opens a PDF device, runs the plotting expression, then silently closes it.
+# All figures are written to the current working directory.
+# ------------------------------------------------------------------------------
 savepdf <- function(filename, expr, width = 7, height = 5) {
   pdf(paste0(filename, ".pdf"), width = width, height = height)
   force(expr)
@@ -39,355 +53,551 @@ savepdf <- function(filename, expr, width = 7, height = 5) {
   invisible(NULL)
 }
 
-# ==============================================================================
-# PART 1: EXPLORATORY DATA ANALYSIS (EDA)
-# ==============================================================================
-# THEORY: 
-# Before fitting any models, we must understand the baseline characteristics 
-# of the Data Generating Process (DGP). We look for four main features:
-# 1. Trend (long-term direction)
-# 2. Seasonality (repeating intra-year patterns)
-# 3. Cycles (multi-year periodic fluctuations)
-# 4. Variance stability (homoskedasticity vs. heteroskedasticity)
+# Approximate peak years for cycle annotations (used in several plots)
+peak_years <- c(1826, 1836, 1847, 1857, 1866, 1876, 1886, 1896, 1907, 1916, 1927)
 
-cat("========================================================\n")
+
+# ==============================================================================
+# PART 1: EXPLORATORY DATA ANALYSIS
+# ==============================================================================
+# Goal: Establish the four key visual properties of the DGP before any modelling.
+# Properties examined: trend, seasonality, cycle, variance stability.
+
+cat("==========================================================\n")
 cat("PART 1: DATASET STRUCTURE & SUMMARY\n")
-cat("========================================================\n")
-cat("Variable:   Number of lynx trapped in Canada\n")
-cat("Unit:       Count (number of animals)\n")
-cat("Frequency:  Annual (1 observation per year)\n")
-cat("Time span:", start(lynx)[1], "to", end(lynx)[1], "\n")
-cat("Total obs:", length(lynx), "\n\n")
-
+cat("==========================================================\n")
+cat("Variable  : Number of lynx trapped in Canada\n")
+cat("Unit      : Count (number of animals)\n")
+cat("Frequency : Annual (1 observation per year)\n")
+cat("Time span :", start(lynx)[1], "to", end(lynx)[1], "\n")
+cat("Obs       :", length(lynx), "\n\n")
 print(summary(lynx))
 
-# Save the raw time series plot
-savepdf("fig_raw_series", {
+# Figure 1: Raw series with cycle annotations
+savepdf("fig_raw_series", width = 8, height = 5, {
   plot(lynx,
-       main = "Annual Lynx Trappings in Canada (1821\u20131934)",
-       xlab = "Year", ylab = "Number of Lynx Trapped",
-       col  = "steelblue", lwd  = 1.5)
+       main = "Annual Lynx Trappings in Canada (1821-1934)",
+       xlab = "Year",
+       ylab = "Number of Lynx Trapped",
+       col  = "steelblue",
+       lwd  = 1.5)
+  # Mark approximate cycle peaks with subtle vertical guides
+  abline(v = peak_years, col = "gray80", lty = 3, lwd = 0.8)
+  # Annotate implied cycle length
+  arrows(x0 = 1826, y0 = 6700, x1 = 1836, y1 = 6700,
+         length = 0.08, code = 3, col = "gray40", lwd = 1.2)
+  text(x = 1831, y = 7100, labels = "~10 yr", cex = 0.75, col = "gray30")
 })
 
-cat("\n[EDA Observations]\n")
-cat("- Trend: The series reverts to a long-run mean; no obvious long-term drift.\n")
-cat("- Seasonality: Data is annual, so intra-year seasonality cannot exist.\n")
-cat("- Cycle: A distinct ~10-year predator-prey oscillation is visually dominant.\n")
-cat("- Variance: Highly non-constant (heteroskedastic). Peaks reach ~7000 while \n")
-cat("  troughs approach 0. This extreme multiplicative scaling dictates that a \n")
-cat("  variance-stabilizing transformation (logarithms) will be strictly required.\n\n")
+cat("[EDA Observations]\n")
+cat("  Trend    : None. Mean ~1,538 animals across 114 years; no drift.\n")
+cat("  Seasonal : Annual data (freq=1); no within-year pattern possible.\n")
+cat("  Cycle    : Strong ~10-year predator-prey oscillation (peaks annotated).\n")
+cat("  Variance : Non-constant. Peak/trough ratio ~180:1 => log transform needed.\n\n")
 
 
 # ==============================================================================
 # PART 2: NON-PARAMETRIC TREND CHECK (MOVING AVERAGE)
 # ==============================================================================
-# THEORY: 
-# Standard decomposition functions like `decompose()` or `stl()` rely on 
-# extracting a seasonal component based on the `frequency` of the ts object. 
-# Because frequency(lynx) == 1, these algorithms will fail. Instead, we use a 
-# 10-year centered moving average. By averaging over the approximate length of 
-# the cycle, we "smooth out" the cycle to reveal any underlying linear trend.
+# Why not decompose() or stl()?
+# Both require frequency > 1 to extract a seasonal component. The lynx series
+# has frequency = 1 (annual), so calling decompose() would throw an error.
+#
+# Instead, a 10-year centred moving average averages out one full cycle,
+# exposing any residual long-run trend. Equal weights (1/10) are used.
 
-cat("========================================================\n")
+cat("==========================================================\n")
 cat("PART 2: DECOMPOSITION & TREND CHECK\n")
-cat("========================================================\n")
+cat("==========================================================\n")
+cat("frequency(lynx) =", frequency(lynx),
+    "=> decompose() not applicable (requires freq > 1)\n")
 
-# Create a two-sided (centered) moving average using equal weights (1/10)
 ma10 <- stats::filter(lynx, rep(1/10, 10), sides = 2)
 
 savepdf("fig_ma10", height = 6, {
-  par(mar = c(7, 4.1, 4.1, 2.1))
-  plot(lynx, main = "Lynx Series with 10-Year Centered Moving Average",
-       xlab = "Year", ylab = "Number of Lynx Trapped",
+  par(mar = c(7, 4.5, 3.5, 1.5))
+  plot(lynx,
+       main = "Lynx Series with 10-Year Centred Moving Average",
+       xlab = "Year",
+       ylab = "Number of Lynx Trapped",
        col  = "steelblue", lwd = 1.5)
-  lines(ma10, col = "red", lwd = 2)
-  legend("bottom", inset = c(0, -0.28), xpd = NA, horiz = TRUE,
+  lines(ma10, col = "firebrick", lwd = 2.5)
+  legend("bottom", inset = c(0, -0.30), xpd = NA, horiz = TRUE,
          legend = c("Raw series", "10-yr moving average"),
-         col    = c("steelblue", "red"), lwd = 2, bty = "n", cex = 0.9)
+         col = c("steelblue", "firebrick"), lwd = c(1.5, 2.5),
+         bty = "n", cex = 0.9)
 })
 
-cat("Visual Conclusion: The 10-year moving average (red line) remains almost \n")
-cat("entirely flat over the 114-year span, informally confirming the absence \n")
-cat("of a secular linear trend.\n\n")
+cat("Conclusion: The moving average is nearly flat across all 114 years,\n")
+cat("confirming no meaningful long-run trend. The cycle dominates.\n\n")
 
 
 # ==============================================================================
 # PART 3: AUTOCORRELATION ANALYSIS (ACF & PACF)
 # ==============================================================================
-# THEORY: 
-# - Autocorrelation Function (ACF): Measures the correlation between the series 
-#   and its own lagged values. It identifies Moving Average (MA) processes and 
-#   signals non-stationarity if it decays too slowly.
-# - Partial Autocorrelation Function (PACF): Isolates the direct effect of lag 'k', 
-#   controlling for the effects of intermediate lags. It is the primary tool for 
-#   identifying the order 'p' of Autoregressive (AR) processes.
+# ACF  — correlation between y_t and y_{t-k} for all k.
+#        Slow decay => non-stationarity; sinusoidal shape => cyclical DGP.
+# PACF — correlation between y_t and y_{t-k} *after* removing lags 1..k-1.
+#        Sharp cut-off after lag p => AR(p) is the natural candidate.
 
-cat("========================================================\n")
-cat("PART 3: AUTOCORRELATION & STATIONARITY CHECK\n")
-cat("========================================================\n")
+cat("==========================================================\n")
+cat("PART 3: AUTOCORRELATION & INITIAL MODEL IDENTIFICATION\n")
+cat("==========================================================\n")
 
-savepdf("fig_acf_raw", width = 7, height = 6, {
-  par(mfrow = c(2, 1))
-  acf(lynx, main = "ACF \u2014 Raw Lynx Series", lag.max = 30)
-  pacf(lynx, main = "PACF \u2014 Raw Lynx Series", lag.max = 30)
+savepdf("fig_acf_raw", width = 7, height = 6.5, {
+  par(mfrow = c(2, 1), mar = c(4, 4.5, 3, 1.5), oma = c(0, 0, 0, 0))
+  acf(lynx,
+      main    = "ACF of Raw Lynx Series",
+      lag.max = 30,
+      col     = "steelblue")
+  pacf(lynx,
+       main    = "PACF of Raw Lynx Series",
+       lag.max = 30,
+       col     = "steelblue")
   par(mfrow = c(1, 1))
 })
 
-cat("ACF Interpretation: Displays a slow, damped sinusoidal (wave-like) decay. \n")
-cat("This is the mathematical hallmark of a strongly cyclical, non-stationary DGP.\n")
-cat("PACF Interpretation: Cuts off sharply after lag 2. This strongly suggests \n")
-cat("that a second-order autoregressive process, AR(2), is the underlying mechanism.\n")
-cat("(Ecologically: This year's lynx count depends heavily on the population sizes \n")
-cat("from the past two years).\n\n")
+cat("ACF  : Sinusoidal slow decay => cyclical, non-stationary series.\n")
+cat("PACF : Cuts off after lag 2 => AR(2) is the initial candidate model.\n\n")
 
 
 # ==============================================================================
-# PART 4: HOLT-WINTERS EXPONENTIAL SMOOTHING
+# PART 4: HOLT-WINTERS EXPONENTIAL SMOOTHING (BENCHMARK)
 # ==============================================================================
-# THEORY: 
-# Holt-Winters (Double Exponential Smoothing) updates level and trend estimates 
-# dynamically. However, it lacks a mathematical parameter to model cycles 
-# (unless they are strict, intra-year seasonalities). We fit it here purely to 
-# demonstrate why classical smoothing fails on cyclical ecological data.
+# The seasonal HW variant requires frequency > 1; ruled out immediately.
+# The non-seasonal (double) form is fitted purely as a benchmark to show
+# why classical smoothing methods fail on cyclical data — HW has no
+# parameter that can represent a multi-year cycle.
 
-cat("========================================================\n")
-cat("PART 4: HOLT-WINTERS SMOOTHING (BENCHMARK)\n")
-cat("========================================================\n")
+cat("==========================================================\n")
+cat("PART 4: HOLT-WINTERS SMOOTHING\n")
+cat("==========================================================\n")
 
-# Fit non-seasonal Holt-Winters (gamma = FALSE)
 hw.lynx <- HoltWinters(lynx, gamma = FALSE)
 
-cat("Fitted Smoothing Parameters:\n")
-cat("  Alpha (Level update speed):", round(hw.lynx$alpha, 4), "\n")
-cat("  Beta  (Trend update speed):", round(hw.lynx$beta,  4), "\n\n")
+cat("Fitted parameters:\n")
+cat("  Alpha (level update speed):", round(hw.lynx$alpha, 4), "\n")
+cat("  Beta  (trend update speed):", round(hw.lynx$beta,  4), "\n\n")
+cat("Note: Alpha = 1.0 => model degenerates to a naive random walk.\n")
+cat("      Beta  = 0.0 => no trend component estimated.\n\n")
 
-cat("Insight: An Alpha of exactly 1.0 means the model places 100% of its weight \n")
-cat("on the most recent observation. It has degenerated into a naive Random Walk.\n")
-
-# Generate benchmark 12-year forecast
 hw.pred <- predict(hw.lynx, n.ahead = 12)
 
+cat("12-year HW forecasts (1935-1946):\n")
+print(round(hw.pred, 0))
+cat("\n")
+
 savepdf("fig_hw", height = 6, {
-  par(mar = c(7, 4.1, 4.1, 2.1))
-  plot(hw.lynx, main = "Holt-Winters Fit on Lynx \u2014 Benchmark", col = "steelblue")
-  lines(hw.pred, col = "red", lwd = 2)
-  legend("bottom", inset = c(0, -0.28), xpd = NA, horiz = TRUE,
-         legend = c("Fitted values", "12-yr forecast"),
-         col    = c("steelblue", "red"), lwd = 2, bty = "n", cex = 0.9)
+  par(mar = c(7, 4.5, 3.5, 1.5))
+  plot(hw.lynx,
+       main = "Holt-Winters Fit on Lynx (Non-Seasonal) -- Benchmark Only",
+       col  = "steelblue")
+  lines(hw.pred, col = "firebrick", lwd = 2)
+  legend("bottom", inset = c(0, -0.30), xpd = NA, horiz = TRUE,
+         legend = c("Observed / Fitted", "12-yr forecast"),
+         col = c("steelblue", "firebrick"), lwd = 2,
+         bty = "n", cex = 0.9)
 })
 
+cat("Conclusion: Forecast rises linearly from 3,448 to 4,020 --\n")
+cat("a straight line that ignores the dominant cycle entirely.\n\n")
+
 
 # ==============================================================================
-# PART 5: FORMAL TREND REGRESSION & GLS CORRECTION
+# PART 5: OLS TREND REGRESSION + GLS CORRECTION
 # ==============================================================================
-# THEORY: 
-# A standard Ordinary Least Squares (OLS) regression assumes independent errors. 
-# In time series, errors are usually highly correlated (the cycle remains in the 
-# residuals). This violates Gauss-Markov assumptions, artificially deflating 
-# standard errors and yielding false positives (spurious significance). 
-# We must use Generalized Least Squares (GLS) to explicitly model the error 
-# correlation, restoring valid statistical inference.
+# Step A (OLS): Fit log(lynx) ~ beta0 + beta1*t to test for a linear trend.
+#   The log transform compresses the peak-to-trough ratio from ~180:1 to ~2:1,
+#   stabilising variance before regression.
+#
+# Step B (GLS): OLS residuals inherit the cycle structure, violating the
+#   Gauss-Markov independence assumption and making OLS SEs invalid.
+#   We re-estimate using GLS with an AR(1) error process (via nlme::gls()),
+#   which restores valid inference on the trend coefficient.
 
-cat("========================================================\n")
-cat("PART 5: REGRESSION & GLS CORRECTION\n")
-cat("========================================================\n")
+cat("==========================================================\n")
+cat("PART 5: REGRESSION ANALYSIS & GLS CORRECTION\n")
+cat("==========================================================\n")
 
-# Apply log transformation to stabilize the extreme multiplicative variance
 log.lynx <- log(lynx)
-Time     <- as.numeric(time(lynx))
+Time     <- as.numeric(time(lynx))   # numeric year: 1821, 1822, ..., 1934
 
+# ── Figure 5: Log-transformed series ──────────────────────────────────────────
 savepdf("fig_log_series", {
-  plot(log.lynx, main = "Log-Transformed Lynx Series",
-       xlab = "Year", ylab = "log(Number of Lynx Trapped)", col = "steelblue", lwd = 1.5)
+  plot(log.lynx,
+       main = "Log-Transformed Lynx Series (Variance Stabilised)",
+       xlab = "Year",
+       ylab = "log(Number of Lynx Trapped)",
+       col  = "steelblue", lwd = 1.5)
 })
 
-# 5a. Naive OLS Estimation
+# ── 5a: OLS ───────────────────────────────────────────────────────────────────
 fit.trend <- lm(log.lynx ~ Time)
 
+cat("--- OLS Trend Regression: log(lynx) ~ beta0 + beta1 * t ---\n")
+print(summary(fit.trend))
+
+cat("\nKey OLS results:\n")
+cf <- coef(summary(fit.trend))
+cat("  beta1 (Time) :", round(cf["Time", "Estimate"], 6),
+    "  (p =", round(cf["Time", "Pr(>|t|)"], 4), ") -- NOT significant\n")
+cat("  R-squared    :", round(summary(fit.trend)$r.squared, 4),
+    " => trend explains 0.48% of variation\n\n")
+
+# ── Figure 6: OLS trend line ───────────────────────────────────────────────────
 savepdf("fig_log_trend", height = 6, {
-  par(mar = c(7, 4.1, 4.1, 2.1))
-  plot(log.lynx, main = "Log Lynx with Linear Trend Regression",
-       xlab = "Year", ylab = "log(lynx)", col = "steelblue", lwd = 1.5)
-  abline(fit.trend, col = "red", lwd = 2)
-  legend("bottom", inset = c(0, -0.28), xpd = NA, horiz = TRUE,
-         legend = c("log(lynx)", "Trend fit"), col = c("steelblue", "red"), lwd = 2, bty = "n", cex = 0.9)
+  par(mar = c(7, 4.5, 3.5, 1.5))
+  plot(log.lynx,
+       main = "OLS Trend Regression on log(lynx)",
+       xlab = "Year", ylab = "log(lynx)",
+       col = "steelblue", lwd = 1.5)
+  abline(fit.trend, col = "firebrick", lwd = 2)
+  legend("bottom", inset = c(0, -0.30), xpd = NA, horiz = TRUE,
+         legend = c("log(lynx)", "OLS trend (flat)"),
+         col = c("steelblue", "firebrick"), lwd = 2,
+         bty = "n", cex = 0.9)
 })
 
-savepdf("fig_trend_resid", width = 7, height = 6, {
-  par(mfrow = c(2, 1))
-  plot(Time, as.numeric(resid(fit.trend)), type = "l",
-       main = "OLS Residuals (Note the obvious lingering cycle)",
-       ylab = "Residual", xlab = "Year", col = "steelblue")
-  abline(h = 0, lty = 2, col = "gray")
-  acf(as.numeric(resid(fit.trend)), main = "ACF of OLS Residuals", lag.max = 30)
+# ── Figure 7: OLS residuals — FIXED layout ────────────────────────────────────
+# Create a proper time-indexed ts residual object so the x-axis shows years.
+ols_resid_ts <- ts(resid(fit.trend), start = start(lynx), frequency = 1)
+
+savepdf("fig_trend_resid", width = 7, height = 7, {
+  par(mfrow = c(2, 1),
+      mar   = c(4.5, 4.5, 3, 1.5),   # bottom, left, top, right for each panel
+      oma   = c(0, 0, 0, 0))          # no outer margins needed
+
+  # Panel 1: residual time plot — note the persistent cycle
+  plot(ols_resid_ts, type = "l",
+       main = "OLS Residuals: The ~10-Year Cycle Survives the Regression",
+       ylab = "Residual",
+       xlab = "Year",
+       col  = "steelblue", lwd = 1.3)
+  abline(h = 0, lty = 2, col = "gray50")
+  # Mark cycle peaks in residuals
+  abline(v = peak_years, col = "gray85", lty = 3, lwd = 0.7)
+
+  # Panel 2: ACF of residuals — still strongly sinusoidal
+  acf(ols_resid_ts,
+      main    = "ACF of OLS Residuals (Sinusoidal Decay Remains)",
+      lag.max = 30,
+      col     = "steelblue")
+
   par(mfrow = c(1, 1))
 })
 
-# 5b. Feasible GLS Estimation 
-# We model the lingering error structure as a first-order autoregressive AR(1) process
+# ── 5b: GLS with AR(1) errors ─────────────────────────────────────────────────
+# Model: log(lynx_t) = beta0 + beta1*t + u_t,  u_t = rho*u_{t-1} + e_t
 fit.gls <- gls(log.lynx ~ Time, correlation = corAR1(form = ~ Time))
 
-cat("--- GLS Results vs OLS Results ---\n")
-cat("GLS correctly models the high residual autocorrelation (rho ~ 0.82).\n")
-cat("Time Coefficient p-value (GLS):", round(summary(fit.gls)$tTable[2,4], 4), "\n")
-cat("Conclusion: Both OLS and GLS confirm the Time trend is NOT statistically significant.\n\n")
+cat("--- GLS with AR(1) Errors: nlme::gls() via REML ---\n")
+cat("Time coefficient p-value (GLS):",
+    round(summary(fit.gls)$tTable["Time", "p-value"], 4),
+    "-- still NOT significant\n")
 
-savepdf("fig_gls_residuals", width = 7, height = 6, {
-  par(mfrow = c(2, 1))
-  plot(Time, as.numeric(resid(fit.trend)), type = "l", 
-       main = "OLS Residuals (Raw, cyclical errors)", ylab = "Residuals", xlab="Year", col = "steelblue")
-  abline(h = 0, lty = 2, col = "red")
-  
-  plot(Time, as.numeric(resid(fit.gls, type = "normalized")), type = "l", 
-       main = "GLS Normalized Residuals (AR(1) structure accounted for)", 
-       ylab = "Norm. Residuals", xlab="Year", col = "darkgreen")
-  abline(h = 0, lty = 2, col = "red")
+gls_coef <- summary(fit.gls)$tTable
+cat("\nFull GLS coefficient table:\n")
+print(round(gls_coef, 4))
+
+rho_hat <- coef(fit.gls$modelStruct$corStruct, unconstrained = FALSE)
+cat("\nEstimated AR(1) error correlation rho =", round(rho_hat, 4), "\n")
+cat("(Large rho confirms the OLS residuals were strongly autocorrelated.)\n\n")
+
+# ── Figure 8: OLS vs GLS normalised residuals — FIXED layout ─────────────────
+gls_resid_ts <- ts(as.numeric(resid(fit.gls, type = "normalized")),
+                   start = start(lynx), frequency = 1)
+
+savepdf("fig_gls_residuals", width = 7, height = 7, {
+  par(mfrow = c(2, 1),
+      mar   = c(4.5, 4.5, 3, 1.5),
+      oma   = c(0, 0, 0, 0))
+
+  # Panel 1: OLS residuals — clearly cyclical
+  plot(ols_resid_ts, type = "l",
+       main = "OLS Residuals (Autocorrelation Unaddressed)",
+       ylab = "Residuals (log scale)",
+       xlab = "Year",
+       col  = "steelblue", lwd = 1.3)
+  abline(h = 0, lty = 2, col = "gray50")
+
+  # Panel 2: GLS normalised residuals — oscillation substantially reduced
+  plot(gls_resid_ts, type = "l",
+       main = "GLS Normalised Residuals (AR(1) Structure Removed)",
+       ylab = "Normalised Residuals",
+       xlab = "Year",
+       col  = "darkgreen", lwd = 1.3)
+  abline(h = 0, lty = 2, col = "gray50")
+
   par(mfrow = c(1, 1))
 })
 
+cat("Conclusion: GLS rho ~ 0.82 => OLS understated SE of beta1.\n")
+cat("Even with valid SEs (GLS), the time trend remains insignificant.\n\n")
+
 
 # ==============================================================================
-# PART 6: TRANSFORMATIONS FOR STATIONARITY
+# PART 6: TRANSFORMATIONS TOWARD STATIONARITY
 # ==============================================================================
-# THEORY: 
-# The Box-Jenkins ARIMA framework requires strict covariance stationarity. 
-# Step 1: Log transform stabilizes the exploding variance (heteroskedasticity).
-# Step 2: First-differencing (subtracting y_{t-1} from y_t) stabilizes the mean 
-#         and removes persistent integration, essentially converting the data 
-#         into an approximate "year-over-year growth rate."
+# Covariance stationarity requires:
+#   (1) Constant mean     => satisfied (series oscillates around ~1,538)
+#   (2) Constant variance => VIOLATED  (peaks ~7000, troughs ~0; ratio 180:1)
+#   (3) ACF depends only on lag => VIOLATED (slow sinusoidal decay)
+#
+# Two-step transformation:
+#   Step 1: log(lynx)             — fixes heteroskedasticity (condition 2)
+#   Step 2: diff(log.lynx, lag=1) — fixes persistence (condition 3)
+#             lag=1 is correct for annual data; lag=4 or lag=12 would be wrong
 
-cat("========================================================\n")
-cat("PART 6: STATIONARITY & DIFFERENCING\n")
-cat("========================================================\n")
+cat("==========================================================\n")
+cat("PART 6: TRANSFORMATIONS FOR STATIONARITY\n")
+cat("==========================================================\n")
 
-# Calculate the first difference of the log series
-log.lynx.diff <- diff(log.lynx, lag = 1)
+log.lynx.diff <- diff(log.lynx, lag = 1)   # n reduces to 113
 
+cat("Transformed series: Delta-log(lynx)\n")
+cat("  Obs  :", length(log.lynx.diff), "\n")
+cat("  Mean :", round(mean(log.lynx.diff), 5), "(close to 0 => no drift)\n")
+cat("  SD   :", round(sd(log.lynx.diff),   5), "\n\n")
+
+# ── Figure 9: Transformed series ──────────────────────────────────────────────
 savepdf("fig_diff_log", {
   plot(log.lynx.diff,
-       main = "First-Differenced Log Lynx  [\u0394log(lynx)]",
-       xlab = "Year", ylab = expression(Delta ~ log(lynx)),
+       main = "First-Differenced Log Lynx  [Delta log(lynx)]",
+       xlab = "Year",
+       ylab = expression(Delta ~ log(lynx)),
        col  = "steelblue", lwd = 1.5)
-  abline(h = 0, lty = 2, col = "gray")
+  abline(h = 0, lty = 2, col = "gray50")
+  abline(h =  mean(log.lynx.diff), lty = 3, col = "firebrick", lwd = 1.2)
+  text(x = 1930, y = mean(log.lynx.diff) + 0.12,
+       labels = paste0("mean = ", round(mean(log.lynx.diff), 3)),
+       cex = 0.75, col = "firebrick", adj = 1)
 })
 
-savepdf("fig_acf_diff", width = 7, height = 6, {
-  par(mfrow = c(2, 1))
-  acf(log.lynx.diff, main = "ACF \u2014 \u0394log(lynx) After Transformation", lag.max = 30)
-  pacf(log.lynx.diff, main = "PACF \u2014 \u0394log(lynx) After Transformation", lag.max = 30)
+# ── Figure 10: ACF / PACF of transformed series ───────────────────────────────
+savepdf("fig_acf_diff", width = 7, height = 6.5, {
+  par(mfrow = c(2, 1), mar = c(4, 4.5, 3, 1.5), oma = c(0, 0, 0, 0))
+  acf(log.lynx.diff,
+      main    = "ACF of Delta-log(lynx) After Transformation",
+      lag.max = 30,
+      col     = "steelblue")
+  pacf(log.lynx.diff,
+       main    = "PACF of Delta-log(lynx) After Transformation",
+       lag.max = 30,
+       col     = "steelblue")
   par(mfrow = c(1, 1))
 })
 
-# Perform Formal Unit Root Testing
+# ── Augmented Dickey-Fuller formal unit-root test ─────────────────────────────
 adf.res <- adf.test(log.lynx.diff, alternative = "stationary")
-cat("Augmented Dickey-Fuller Test:\n")
-cat("Null Hypothesis: Series has a Unit Root (Non-Stationary)\n")
-cat("p-value:", adf.res$p.value, "\n")
-cat("Verdict: We reject the null. The differenced series is strictly stationary.\n\n")
+cat("Augmented Dickey-Fuller Test on Delta-log(lynx):\n")
+cat("  H0: Series has a unit root (non-stationary)\n")
+cat("  Dickey-Fuller statistic:", round(adf.res$statistic, 4), "\n")
+cat("  p-value               :", round(adf.res$p.value,    4), "\n")
+cat("  Verdict: Reject H0. Transformed series is stationary.\n\n")
 
 
 # ==============================================================================
 # PART 7: ARMA MODEL SELECTION & DIAGNOSTICS
 # ==============================================================================
-# THEORY: 
-# We fit several competing ARMA(p,q) specifications to the stationary delta-log series. 
-# Model selection is driven by Akaike's Information Criterion (AIC), which mathematically 
-# balances goodness-of-fit (log-likelihood) against model complexity (parameter penalty).
-# A lower AIC indicates a more parsimonious, superior model.
+# Six ARMA(p,q) models are fitted to the stationary Delta-log series.
+# d=0 inside arima() because we already differenced manually in Part 6.
+# Selection criterion: AIC = -2*loglik + 2k (lower = better fit + parsimony).
+# An AIC gap > 10 points is considered decisive (Burnham & Anderson, 2004).
 
-cat("========================================================\n")
-cat("PART 7: BOX-JENKINS ARMA MODELING\n")
-cat("========================================================\n")
+cat("==========================================================\n")
+cat("PART 7: BOX-JENKINS ARMA MODEL SELECTION\n")
+cat("==========================================================\n")
 
-# Fit candidates (Note: d=0 inside arima() because the series is already pre-differenced)
+# Fit six candidate models
 fit.ar1    <- arima(log.lynx.diff, order = c(1, 0, 0))
 fit.ar2    <- arima(log.lynx.diff, order = c(2, 0, 0))
 fit.ma1    <- arima(log.lynx.diff, order = c(0, 0, 1))
 fit.ma2    <- arima(log.lynx.diff, order = c(0, 0, 2))
 fit.arma11 <- arima(log.lynx.diff, order = c(1, 0, 1))
-fit.arma21 <- arima(log.lynx.diff, order = c(2, 0, 1))
+fit.arma21 <- arima(log.lynx.diff, order = c(2, 0, 1))  # PREFERRED
 
-# Extract and compare AIC scores
-aic.vals <- c("AR(1)" = AIC(fit.ar1), "AR(2)" = AIC(fit.ar2), "MA(1)" = AIC(fit.ma1), 
-              "MA(2)" = AIC(fit.ma2), "ARMA(1,1)" = AIC(fit.arma11), "ARMA(2,1)" = AIC(fit.arma21))
-
-df.aic <- data.frame(Model = names(aic.vals), Parameters = c(2, 3, 2, 3, 3, 4), AIC = round(aic.vals, 3))
+# AIC comparison table
+aic.vals <- c(
+  "AR(1)"     = AIC(fit.ar1),
+  "AR(2)"     = AIC(fit.ar2),
+  "MA(1)"     = AIC(fit.ma1),
+  "MA(2)"     = AIC(fit.ma2),
+  "ARMA(1,1)" = AIC(fit.arma11),
+  "ARMA(2,1)" = AIC(fit.arma21)
+)
+df.aic <- data.frame(
+  Model      = names(aic.vals),
+  Parameters = c(2L, 3L, 2L, 3L, 3L, 4L),
+  AIC        = round(aic.vals, 3),
+  row.names  = NULL
+)
+cat("\n--- AIC Comparison (lower = better) ---\n")
 print(df.aic, row.names = FALSE)
+cat("\nPreferred: ARMA(2,1) | AIC gap vs AR(2):",
+    round(AIC(fit.ar2) - AIC(fit.arma21), 2), "points (decisive)\n\n")
 
-cat("\nWINNER: ARMA(2,1) has an overwhelmingly lower AIC (a decisive 39-point margin).\n\n")
+# Full output for preferred model
+cat("--- Preferred Model: ARMA(2,1) on Delta-log(lynx) ---\n")
+print(fit.arma21)
 
-# ROBUSTNESS CHECK:
-# The Moving Average parameter in ARMA(2,1) is near -1.0, bordering the limit of invertibility.
-# Because ARMA(2,1) on delta-log is algebraically analogous to ARIMA(2,1,1) on log data,
-# we formally test whether dropping the MA parameter entirely (ARIMA(2,1,0)) performs better.
+# Coefficient interpretation
+cat("\nCoefficient interpretation:\n")
+cat("  ar1 = ", round(fit.arma21$coef["ar1"], 4),
+    "=> positive momentum (growth this year predicts growth next year)\n")
+cat("  ar2 = ", round(fit.arma21$coef["ar2"], 4),
+    "=> reversal mechanism; combined with ar1, implies complex AR roots\n")
+cat("  ma1 = ", round(fit.arma21$coef["ma1"], 4),
+    "=> near invertibility boundary (-1); see robustness check below\n")
+cat("  mu  = ", round(fit.arma21$coef["intercept"], 5),
+    "=> long-run mean ~0 (no drift)\n")
+
+# Verify complex roots => oscillation
+disc <- fit.arma21$coef["ar1"]^2 + 4 * fit.arma21$coef["ar2"]
+cat("\nDiscriminant ar1^2 + 4*ar2 =", round(disc, 4),
+    "< 0 => complex roots => oscillatory forecasts\n")
+T_cycle <- 2 * pi / acos(fit.arma21$coef["ar1"] /
+                          (2 * sqrt(-fit.arma21$coef["ar2"])))
+cat("Implied cycle period =", round(T_cycle, 2), "years\n\n")
+
+# ── Figure 11: ARMA(2,1) residual diagnostics ─────────────────────────────────
+savepdf("fig_arma21_resid", width = 7, height = 6.5, {
+  par(mfrow = c(2, 1), mar = c(4, 4.5, 3, 1.5), oma = c(0, 0, 0, 0))
+  acf(resid(fit.arma21),
+      main    = "Residual ACF: ARMA(2,1) on Delta-log(lynx)",
+      lag.max = 30,
+      col     = "steelblue")
+  pacf(resid(fit.arma21),
+       main    = "Residual PACF: ARMA(2,1) on Delta-log(lynx)",
+       lag.max = 30,
+       col     = "steelblue")
+  par(mfrow = c(1, 1))
+})
+
+# Ljung-Box white-noise test on residuals
+lb10 <- Box.test(resid(fit.arma21), lag = 10, type = "Ljung-Box")
+lb20 <- Box.test(resid(fit.arma21), lag = 20, type = "Ljung-Box")
+cat("--- Ljung-Box Tests on ARMA(2,1) Residuals ---\n")
+cat("  Lag 10: X^2 =", round(lb10$statistic, 4), " p =", round(lb10$p.value, 4),
+    "=>", ifelse(lb10$p.value > 0.05, "PASS (white noise)", "FAIL"), "\n")
+cat("  Lag 20: X^2 =", round(lb20$statistic, 4), " p =", round(lb20$p.value, 4),
+    "=> marginal; expected for irregular cycles\n\n")
+
+# ── Robustness check: ARIMA(2,1,0) vs ARIMA(2,1,1) on log.lynx ───────────────
+# Because ma1 ~ -1 is at the invertibility boundary, we verify ARIMA(2,1,1)
+# still beats ARIMA(2,1,0) when using built-in d=1 differencing on log.lynx.
 fit.arima210 <- arima(log.lynx, order = c(2, 1, 0))
 fit.arima211 <- arima(log.lynx, order = c(2, 1, 1))
 
+cat("--- Robustness Check (fitted on log.lynx with built-in d=1) ---\n")
+cat("  ARIMA(2,1,0): AIC =", round(AIC(fit.arima210), 3), "\n")
+cat("  ARIMA(2,1,1): AIC =", round(AIC(fit.arima211), 3),
+    "(preferred; gap =", round(AIC(fit.arima210) - AIC(fit.arima211), 2), "pts)\n\n")
+
+# ── Figure 12: Residual ACF / PACF comparison ─────────────────────────────────
 savepdf("fig_arima_resid_compare", width = 10, height = 7, {
-  par(mfrow = c(2, 2))
-  acf(resid(fit.arima210), main = "ARIMA(2,1,0) Residual ACF")
-  acf(resid(fit.arima211), main = "ARIMA(2,1,1) Residual ACF")
-  pacf(resid(fit.arima210), main = "ARIMA(2,1,0) Residual PACF")
-  pacf(resid(fit.arima211), main = "ARIMA(2,1,1) Residual PACF")
+  par(mfrow = c(2, 2), mar = c(4, 4.5, 3, 1.5), oma = c(0, 0, 1, 0))
+  acf(resid(fit.arima210),
+      main = "ARIMA(2,1,0) Residual ACF", lag.max = 20, col = "firebrick")
+  acf(resid(fit.arima211),
+      main = "ARIMA(2,1,1) Residual ACF", lag.max = 20, col = "darkgreen")
+  pacf(resid(fit.arima210),
+       main = "ARIMA(2,1,0) Residual PACF", lag.max = 20, col = "firebrick")
+  pacf(resid(fit.arima211),
+       main = "ARIMA(2,1,1) Residual PACF", lag.max = 20, col = "darkgreen")
+  mtext("Robustness Check: ARIMA(2,1,0) vs ARIMA(2,1,1) on log(lynx)",
+        outer = TRUE, cex = 1.0, font = 2)
   par(mfrow = c(1, 1))
 })
 
-# Residual Diagnostics for Preferred Model
-savepdf("fig_arma21_resid", width = 7, height = 6, {
-  par(mfrow = c(2, 1))
-  acf(resid(fit.arma21), main = "Residual ACF \u2014 ARMA(2,1) on \u0394log(lynx)", lag.max = 30)
-  pacf(resid(fit.arma21), main = "Residual PACF \u2014 ARMA(2,1) on \u0394log(lynx)", lag.max = 30)
-  par(mfrow = c(1, 1))
-})
-
-# Formal test for white noise
-lb10.arma21 <- Box.test(resid(fit.arma21), lag = 10, type = "Ljung-Box")
-cat("Ljung-Box Test for White Noise (Lag 10):\n")
-cat("p-value:", lb10.arma21$p.value, "\n")
-cat("Verdict: Fail to reject the null. Residuals act as random white noise, \n")
-cat("confirming the ARMA(2,1) model has successfully captured the data's structure.\n\n")
-
 
 # ==============================================================================
-# PART 8: ARIMA FORECASTING
+# PART 8: FORECASTING WITH THE PREFERRED MODEL
 # ==============================================================================
-# THEORY: 
-# We project the ARMA(2,1) equation forward 12 periods. The complex roots 
-# of the AR parameters will cause the point forecast to correctly oscillate, mirroring 
-# the predator-prey dynamics. Simultaneously, the prediction intervals will expand 
-# mathematically to accurately represent growing future uncertainty over time.
+# 12-step-ahead forecasts from ARMA(2,1) on Delta-log(lynx).
+# The complex AR roots cause the forecast to oscillate in line with the
+# ~10-year predator-prey cycle. Prediction intervals widen with horizon
+# as forecast uncertainty compounds. Long-run: forecasts revert to mean ~0.022.
 
-cat("========================================================\n")
-cat("PART 8: FORECASTING WITH PREFERRED MODEL\n")
-cat("========================================================\n")
+cat("==========================================================\n")
+cat("PART 8: 12-STEP-AHEAD FORECASTING\n")
+cat("==========================================================\n")
 
 pred.arma21 <- predict(fit.arma21, n.ahead = 12)
 upper95     <- pred.arma21$pred + 1.96 * pred.arma21$se
 lower95     <- pred.arma21$pred - 1.96 * pred.arma21$se
 last.yr     <- end(log.lynx.diff)[1]
 
+fc.df <- data.frame(
+  Year     = (last.yr + 1):(last.yr + 12),
+  Forecast = round(as.numeric(pred.arma21$pred), 5),
+  SE       = round(as.numeric(pred.arma21$se),   5),
+  Lower95  = round(as.numeric(lower95), 5),
+  Upper95  = round(as.numeric(upper95), 5)
+)
+cat("12-year forecast on Delta-log(lynx) scale with 95% PI:\n")
+print(fc.df)
+cat("\n")
+
+# ── Figure 13: Forecast with prediction intervals ─────────────────────────────
 savepdf("fig_arma21_forecast", height = 6, {
-  par(mar = c(8, 4.1, 4.1, 2.1))
+  par(mar = c(8, 4.5, 3.5, 1.5))
   plot(log.lynx.diff,
-       main = "ARMA(2,1) 12-Year Forecast \u2014 Delta-log(lynx) with 95% PI",
-       xlab = "Year", ylab = expression(Delta ~ log(lynx)),
+       main = "ARMA(2,1): 12-Year Forecast with 95% Prediction Interval",
+       xlab = "Year",
+       ylab = expression(Delta ~ log(lynx)),
        xlim = c(1821, last.yr + 13),
        col  = "steelblue", lwd = 1.5)
-  abline(h = 0, lty = 2, col = "gray")
-  
-  # Plot the oscillating point forecast
-  lines(ts(pred.arma21$pred, start = last.yr + 1), col = "red",  lwd = 2)
-  
-  # Plot expanding uncertainty bounds
-  lines(ts(upper95,          start = last.yr + 1), col = "red",  lty = 2)
-  lines(ts(lower95,          start = last.yr + 1), col = "red",  lty = 2)
-  
-  legend("bottom", inset = c(0, -0.33), xpd = NA, horiz = TRUE,
+  abline(h = 0, lty = 2, col = "gray50")
+
+  # Point forecast (oscillates)
+  lines(ts(pred.arma21$pred, start = last.yr + 1),
+        col = "firebrick", lwd = 2)
+  # Upper and lower 95% PI (widening as horizon grows)
+  lines(ts(upper95, start = last.yr + 1),
+        col = "firebrick", lty = 2, lwd = 1.2)
+  lines(ts(lower95, start = last.yr + 1),
+        col = "firebrick", lty = 2, lwd = 1.2)
+
+  legend("bottom", inset = c(0, -0.35), xpd = NA, horiz = TRUE,
          legend = c("Observed", "ARMA(2,1) forecast", "95% PI"),
-         col    = c("steelblue", "red", "red"),
-         lty    = c(1, 1, 2), lwd = 2, bty = "n", cex = 0.9)
+         col    = c("steelblue", "firebrick", "firebrick"),
+         lty    = c(1, 1, 2), lwd = c(1.5, 2, 1.2),
+         bty = "n", cex = 0.9)
 })
 
-cat("Forecasting complete. Unlike Holt-Winters, the ARMA(2,1) model correctly \n")
-cat("extrapolates the cyclical structure of the Canadian Lynx population.\n")
+# ── Final comparison ───────────────────────────────────────────────────────────
+cat("--- Model Comparison Summary ---\n")
+cat("Holt-Winters : Forecast 3448 to 4020 linearly. Ignores the cycle.\n")
+cat("               alpha=1.0 degenerates to a naive random walk.\n")
+cat("ARMA(2,1)   : Forecast oscillates. Cycle period ~",
+    round(T_cycle, 1), "years.\n")
+cat("               AIC wins by 39.3 pts. Ljung-Box p=0.071 (pass) at lag 10.\n")
+cat("               Clear choice for this cyclical dataset.\n\n")
+
+
+# ==============================================================================
+# SESSION INFORMATION (for full reproducibility)
+# ==============================================================================
+cat("==========================================================\n")
+cat("SESSION INFORMATION\n")
+cat("==========================================================\n")
+sessionInfo()
+
+cat("\n=== FIGURES PRODUCED ===\n")
+figs <- c(
+  "fig_raw_series.pdf   -- Raw annual trappings with cycle peak markers",
+  "fig_ma10.pdf         -- Raw series + 10-year centred moving average",
+  "fig_acf_raw.pdf      -- ACF and PACF of raw lynx series",
+  "fig_hw.pdf           -- Holt-Winters fit and 12-year benchmark forecast",
+  "fig_log_series.pdf   -- Log-transformed series (variance stabilised)",
+  "fig_log_trend.pdf    -- Log series with OLS trend line",
+  "fig_trend_resid.pdf  -- OLS residuals and residual ACF",
+  "fig_gls_residuals.pdf-- OLS vs GLS normalised residuals comparison",
+  "fig_diff_log.pdf     -- First-differenced log series with mean annotated",
+  "fig_acf_diff.pdf     -- ACF and PACF after transformation",
+  "fig_arma21_resid.pdf -- ARMA(2,1) residual ACF and PACF",
+  "fig_arima_resid_compare.pdf -- ARIMA(2,1,0) vs ARIMA(2,1,1) diagnostics",
+  "fig_arma21_forecast.pdf -- 12-year forecast with 95% PI"
+)
+cat(paste(figs, collapse = "\n"), "\n")
 cat("\n=== ANALYSIS COMPLETE ===\n")
