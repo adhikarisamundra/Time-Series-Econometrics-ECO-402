@@ -18,7 +18,7 @@
 # 0. Environment Setup & Helper Functions
 # ------------------------------------------------------------------------------
 # We require 'nlme' for Generalized Least Squares estimation and 'tseries' 
-# for formal unit-root testing.
+# for formal Augmented Dickey-Fuller (ADF) unit-root testing.
 if (!require(nlme)) install.packages("nlme")
 if (!require(tseries)) install.packages("tseries")
 
@@ -42,8 +42,13 @@ savepdf <- function(filename, expr, width = 7, height = 5) {
 # ==============================================================================
 # PART 1: EXPLORATORY DATA ANALYSIS (EDA)
 # ==============================================================================
-# Theory: Before fitting any models, we must understand the baseline characteristics 
-# of the data generating process (DGP): Trend, Seasonality, Cycles, and Variance.
+# THEORY: 
+# Before fitting any models, we must understand the baseline characteristics 
+# of the Data Generating Process (DGP). We look for four main features:
+# 1. Trend (long-term direction)
+# 2. Seasonality (repeating intra-year patterns)
+# 3. Cycles (multi-year periodic fluctuations)
+# 4. Variance stability (homoskedasticity vs. heteroskedasticity)
 
 cat("========================================================\n")
 cat("PART 1: DATASET STRUCTURE & SUMMARY\n")
@@ -67,19 +72,21 @@ savepdf("fig_raw_series", {
 cat("\n[EDA Observations]\n")
 cat("- Trend: The series reverts to a long-run mean; no obvious long-term drift.\n")
 cat("- Seasonality: Data is annual, so intra-year seasonality cannot exist.\n")
-cat("- Cycle: A distinct ~10-year predator-prey oscillation is visible.\n")
+cat("- Cycle: A distinct ~10-year predator-prey oscillation is visually dominant.\n")
 cat("- Variance: Highly non-constant (heteroskedastic). Peaks reach ~7000 while \n")
-cat("  troughs approach 0. This extreme multiplicative scaling suggests a \n")
-cat("  variance-stabilizing transformation (like logarithms) will be required.\n\n")
+cat("  troughs approach 0. This extreme multiplicative scaling dictates that a \n")
+cat("  variance-stabilizing transformation (logarithms) will be strictly required.\n\n")
 
 
 # ==============================================================================
 # PART 2: NON-PARAMETRIC TREND CHECK (MOVING AVERAGE)
 # ==============================================================================
-# Theory: Standard decomposition functions like decompose() or stl() rely on 
-# extracting a seasonal component based on the frequency of the ts object. 
-# Because frequency(lynx) == 1, these functions will fail. Instead, we use a 
-# 10-year centered moving average to smooth out the cycle and isolate any trend.
+# THEORY: 
+# Standard decomposition functions like `decompose()` or `stl()` rely on 
+# extracting a seasonal component based on the `frequency` of the ts object. 
+# Because frequency(lynx) == 1, these algorithms will fail. Instead, we use a 
+# 10-year centered moving average. By averaging over the approximate length of 
+# the cycle, we "smooth out" the cycle to reveal any underlying linear trend.
 
 cat("========================================================\n")
 cat("PART 2: DECOMPOSITION & TREND CHECK\n")
@@ -99,18 +106,21 @@ savepdf("fig_ma10", height = 6, {
          col    = c("steelblue", "red"), lwd = 2, bty = "n", cex = 0.9)
 })
 
-cat("Visual Conclusion: The 10-year moving average (red line in plot) remains \n")
-cat("almost entirely flat. This informally confirms the absence of a linear trend.\n\n")
+cat("Visual Conclusion: The 10-year moving average (red line) remains almost \n")
+cat("entirely flat over the 114-year span, informally confirming the absence \n")
+cat("of a secular linear trend.\n\n")
 
 
 # ==============================================================================
 # PART 3: AUTOCORRELATION ANALYSIS (ACF & PACF)
 # ==============================================================================
-# Theory: 
-# - The Autocorrelation Function (ACF) identifies the presence of moving average (MA) 
-#   processes and overall persistence/stationarity.
-# - The Partial Autocorrelation Function (PACF) isolates the direct effect of lag k, 
-#   controlling for intermediate lags, identifying autoregressive (AR) processes.
+# THEORY: 
+# - Autocorrelation Function (ACF): Measures the correlation between the series 
+#   and its own lagged values. It identifies Moving Average (MA) processes and 
+#   signals non-stationarity if it decays too slowly.
+# - Partial Autocorrelation Function (PACF): Isolates the direct effect of lag 'k', 
+#   controlling for the effects of intermediate lags. It is the primary tool for 
+#   identifying the order 'p' of Autoregressive (AR) processes.
 
 cat("========================================================\n")
 cat("PART 3: AUTOCORRELATION & STATIONARITY CHECK\n")
@@ -123,32 +133,36 @@ savepdf("fig_acf_raw", width = 7, height = 6, {
   par(mfrow = c(1, 1))
 })
 
-cat("ACF Interpretation: Shows a slow, damped sinusoidal decay. This wave-like \n")
-cat("pattern is the mathematical hallmark of a strongly cyclical, non-stationary process.\n")
-cat("PACF Interpretation: Cuts off sharply after lag 2. This strongly hints that \n")
-cat("a second-order autoregressive process, AR(2), might be the underlying DGP.\n\n")
+cat("ACF Interpretation: Displays a slow, damped sinusoidal (wave-like) decay. \n")
+cat("This is the mathematical hallmark of a strongly cyclical, non-stationary DGP.\n")
+cat("PACF Interpretation: Cuts off sharply after lag 2. This strongly suggests \n")
+cat("that a second-order autoregressive process, AR(2), is the underlying mechanism.\n")
+cat("(Ecologically: This year's lynx count depends heavily on the population sizes \n")
+cat("from the past two years).\n\n")
 
 
 # ==============================================================================
 # PART 4: HOLT-WINTERS EXPONENTIAL SMOOTHING
 # ==============================================================================
-# Theory: Holt-Winters is excellent for trends and strict seasonalities, but it 
-# lacks a structural parameter for cyclicality. We fit it here purely to demonstrate 
-# why it fails on cyclic predator-prey data.
+# THEORY: 
+# Holt-Winters (Double Exponential Smoothing) updates level and trend estimates 
+# dynamically. However, it lacks a mathematical parameter to model cycles 
+# (unless they are strict, intra-year seasonalities). We fit it here purely to 
+# demonstrate why classical smoothing fails on cyclical ecological data.
 
 cat("========================================================\n")
 cat("PART 4: HOLT-WINTERS SMOOTHING (BENCHMARK)\n")
 cat("========================================================\n")
 
-# Fit non-seasonal Holt-Winters (Double Exponential Smoothing)
+# Fit non-seasonal Holt-Winters (gamma = FALSE)
 hw.lynx <- HoltWinters(lynx, gamma = FALSE)
 
 cat("Fitted Smoothing Parameters:\n")
 cat("  Alpha (Level update speed):", round(hw.lynx$alpha, 4), "\n")
 cat("  Beta  (Trend update speed):", round(hw.lynx$beta,  4), "\n\n")
 
-cat("Insight: An Alpha of 1.0 means the model acts almost exactly like a Naive \n")
-cat("Random Walk, placing 100% of its weight on the most recent observation.\n")
+cat("Insight: An Alpha of exactly 1.0 means the model places 100% of its weight \n")
+cat("on the most recent observation. It has degenerated into a naive Random Walk.\n")
 
 # Generate benchmark 12-year forecast
 hw.pred <- predict(hw.lynx, n.ahead = 12)
@@ -166,16 +180,19 @@ savepdf("fig_hw", height = 6, {
 # ==============================================================================
 # PART 5: FORMAL TREND REGRESSION & GLS CORRECTION
 # ==============================================================================
-# Theory: A standard OLS regression of log(y) on time assumes independent errors. 
-# In time series, errors are usually highly correlated, violating Gauss-Markov 
-# assumptions, artificially deflating standard errors, and yielding false positives 
-# (spurious significance). We must use Generalized Least Squares (GLS) to correct this.
+# THEORY: 
+# A standard Ordinary Least Squares (OLS) regression assumes independent errors. 
+# In time series, errors are usually highly correlated (the cycle remains in the 
+# residuals). This violates Gauss-Markov assumptions, artificially deflating 
+# standard errors and yielding false positives (spurious significance). 
+# We must use Generalized Least Squares (GLS) to explicitly model the error 
+# correlation, restoring valid statistical inference.
 
 cat("========================================================\n")
 cat("PART 5: REGRESSION & GLS CORRECTION\n")
 cat("========================================================\n")
 
-# Apply log transformation to stabilize the variance
+# Apply log transformation to stabilize the extreme multiplicative variance
 log.lynx <- log(lynx)
 Time     <- as.numeric(time(lynx))
 
@@ -198,31 +215,32 @@ savepdf("fig_log_trend", height = 6, {
 
 savepdf("fig_trend_resid", width = 7, height = 6, {
   par(mfrow = c(2, 1))
-  plot(time(lynx), resid(fit.trend), type = "l",
+  plot(Time, as.numeric(resid(fit.trend)), type = "l",
        main = "OLS Residuals (Note the obvious lingering cycle)",
        ylab = "Residual", xlab = "Year", col = "steelblue")
   abline(h = 0, lty = 2, col = "gray")
-  acf(resid(fit.trend), main = "ACF of OLS Residuals", lag.max = 30)
+  acf(as.numeric(resid(fit.trend)), main = "ACF of OLS Residuals", lag.max = 30)
   par(mfrow = c(1, 1))
 })
 
-# 5b. Feasible GLS Estimation (Modeling the error as an AR(1) process)
+# 5b. Feasible GLS Estimation 
+# We model the lingering error structure as a first-order autoregressive AR(1) process
 fit.gls <- gls(log.lynx ~ Time, correlation = corAR1(form = ~ Time))
 
 cat("--- GLS Results vs OLS Results ---\n")
-cat("GLS correctly models the lingering autocorrelation inside the residuals.\n")
+cat("GLS correctly models the high residual autocorrelation (rho ~ 0.82).\n")
 cat("Time Coefficient p-value (GLS):", round(summary(fit.gls)$tTable[2,4], 4), "\n")
 cat("Conclusion: Both OLS and GLS confirm the Time trend is NOT statistically significant.\n\n")
 
 savepdf("fig_gls_residuals", width = 7, height = 6, {
   par(mfrow = c(2, 1))
-  plot(time(lynx), resid(fit.trend), type = "l", 
-       main = "OLS Residuals (Raw)", ylab = "Residuals", col = "steelblue")
+  plot(Time, as.numeric(resid(fit.trend)), type = "l", 
+       main = "OLS Residuals (Raw, cyclical errors)", ylab = "Residuals", xlab="Year", col = "steelblue")
   abline(h = 0, lty = 2, col = "red")
   
-  plot(time(lynx), resid(fit.gls, type = "normalized"), type = "l", 
-       main = "GLS Normalized Residuals (AR(1) structure removed)", 
-       ylab = "Norm. Residuals", col = "darkgreen")
+  plot(Time, as.numeric(resid(fit.gls, type = "normalized")), type = "l", 
+       main = "GLS Normalized Residuals (AR(1) structure accounted for)", 
+       ylab = "Norm. Residuals", xlab="Year", col = "darkgreen")
   abline(h = 0, lty = 2, col = "red")
   par(mfrow = c(1, 1))
 })
@@ -231,9 +249,12 @@ savepdf("fig_gls_residuals", width = 7, height = 6, {
 # ==============================================================================
 # PART 6: TRANSFORMATIONS FOR STATIONARITY
 # ==============================================================================
-# Theory: Box-Jenkins ARIMA requires strict covariance stationarity. 
+# THEORY: 
+# The Box-Jenkins ARIMA framework requires strict covariance stationarity. 
 # Step 1: Log transform stabilizes the exploding variance (heteroskedasticity).
-# Step 2: First-differencing stabilizes the mean and removes persistent integration.
+# Step 2: First-differencing (subtracting y_{t-1} from y_t) stabilizes the mean 
+#         and removes persistent integration, essentially converting the data 
+#         into an approximate "year-over-year growth rate."
 
 cat("========================================================\n")
 cat("PART 6: STATIONARITY & DIFFERENCING\n")
@@ -268,15 +289,17 @@ cat("Verdict: We reject the null. The differenced series is strictly stationary.
 # ==============================================================================
 # PART 7: ARMA MODEL SELECTION & DIAGNOSTICS
 # ==============================================================================
-# Theory: We fit several competing ARMA specifications to the stationary 
-# delta-log series. Model selection is driven by Akaike's Information Criterion (AIC), 
-# which balances goodness-of-fit against model complexity (parameter penalty).
+# THEORY: 
+# We fit several competing ARMA(p,q) specifications to the stationary delta-log series. 
+# Model selection is driven by Akaike's Information Criterion (AIC), which mathematically 
+# balances goodness-of-fit (log-likelihood) against model complexity (parameter penalty).
+# A lower AIC indicates a more parsimonious, superior model.
 
 cat("========================================================\n")
 cat("PART 7: BOX-JENKINS ARMA MODELING\n")
 cat("========================================================\n")
 
-# Fit candidates (Note: d=0 inside arima() because the series is pre-differenced)
+# Fit candidates (Note: d=0 inside arima() because the series is already pre-differenced)
 fit.ar1    <- arima(log.lynx.diff, order = c(1, 0, 0))
 fit.ar2    <- arima(log.lynx.diff, order = c(2, 0, 0))
 fit.ma1    <- arima(log.lynx.diff, order = c(0, 0, 1))
@@ -285,20 +308,18 @@ fit.arma11 <- arima(log.lynx.diff, order = c(1, 0, 1))
 fit.arma21 <- arima(log.lynx.diff, order = c(2, 0, 1))
 
 # Extract and compare AIC scores
-aic.vals <- c(
-  "AR(1)"     = AIC(fit.ar1), "AR(2)"     = AIC(fit.ar2),
-  "MA(1)"     = AIC(fit.ma1), "MA(2)"     = AIC(fit.ma2),
-  "ARMA(1,1)" = AIC(fit.arma11), "ARMA(2,1)" = AIC(fit.arma21)
-)
+aic.vals <- c("AR(1)" = AIC(fit.ar1), "AR(2)" = AIC(fit.ar2), "MA(1)" = AIC(fit.ma1), 
+              "MA(2)" = AIC(fit.ma2), "ARMA(1,1)" = AIC(fit.arma11), "ARMA(2,1)" = AIC(fit.arma21))
 
 df.aic <- data.frame(Model = names(aic.vals), Parameters = c(2, 3, 2, 3, 3, 4), AIC = round(aic.vals, 3))
 print(df.aic, row.names = FALSE)
 
-cat("\nWINNER: ARMA(2,1) has an overwhelmingly lower AIC (decisive margin).\n\n")
+cat("\nWINNER: ARMA(2,1) has an overwhelmingly lower AIC (a decisive 39-point margin).\n\n")
 
-# Robustness Check
-# Because ARMA(2,1) on delta-log is algebraically identical to ARIMA(2,1,1) on log,
-# we test whether dropping the MA parameter (ARIMA(2,1,0)) performs better.
+# ROBUSTNESS CHECK:
+# The Moving Average parameter in ARMA(2,1) is near -1.0, bordering the limit of invertibility.
+# Because ARMA(2,1) on delta-log is algebraically analogous to ARIMA(2,1,1) on log data,
+# we formally test whether dropping the MA parameter entirely (ARIMA(2,1,0)) performs better.
 fit.arima210 <- arima(log.lynx, order = c(2, 1, 0))
 fit.arima211 <- arima(log.lynx, order = c(2, 1, 1))
 
@@ -330,10 +351,11 @@ cat("confirming the ARMA(2,1) model has successfully captured the data's structu
 # ==============================================================================
 # PART 8: ARIMA FORECASTING
 # ==============================================================================
-# Theory: We project the ARMA(2,1) equation forward 12 periods. The complex roots 
-# of the AR parameters will cause the forecast to correctly oscillate, mirroring 
-# the predator-prey dynamics, while prediction intervals expand mathematically 
-# to represent growing future uncertainty.
+# THEORY: 
+# We project the ARMA(2,1) equation forward 12 periods. The complex roots 
+# of the AR parameters will cause the point forecast to correctly oscillate, mirroring 
+# the predator-prey dynamics. Simultaneously, the prediction intervals will expand 
+# mathematically to accurately represent growing future uncertainty over time.
 
 cat("========================================================\n")
 cat("PART 8: FORECASTING WITH PREFERRED MODEL\n")
@@ -355,6 +377,7 @@ savepdf("fig_arma21_forecast", height = 6, {
   
   # Plot the oscillating point forecast
   lines(ts(pred.arma21$pred, start = last.yr + 1), col = "red",  lwd = 2)
+  
   # Plot expanding uncertainty bounds
   lines(ts(upper95,          start = last.yr + 1), col = "red",  lty = 2)
   lines(ts(lower95,          start = last.yr + 1), col = "red",  lty = 2)
